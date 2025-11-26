@@ -1,0 +1,767 @@
+"""
+PCC Integration Model v3: External vs Internal Coordination
+
+Key insight: dPCC and vPCC handle fundamentally different coordination modes.
+
+dPCC (Dorsal PCC) - "Act as ONE toward the WORLD"
+================================================
+- Coordinates whole-brain unified action toward external stimuli
+- Connected to: CEN (central executive), premotor, motor areas
+- Active when: External focus, need to respond as unified agent
+- Mode: Champions must AGREE on single action → arbitration needed
+
+vPCC (Ventral PCC) - "Route signals between PARTS"  
+================================================
+- Routes signals between internal agents who remain separate
+- Connected to: DMN, sgACC, hippocampus
+- Active when: Internal processing, agents work independently
+- Mode: No need for agreement → just facilitate communication
+
+MEMORY IMPLICATIONS:
+- Encoding: Hippocampus snapshots the configuration (low PCC activity)
+- Retrieval: vPCC routes signals to REINSTANTIATE the configuration
+  - Agents must be coordinated back INTO that shape
+  - This IS what "remembering" feels like
+  - dPCC stays quiet (not acting toward external world)
+
+THE SELF:
+- Not something vPCC "checks against"
+- The self IS the characteristic pattern of internal coordination
+- Sparse/noisy vPCC → ambiguous pattern matching → ideas of reference
+"""
+
+import random
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple, Set
+from enum import Enum
+from copy import deepcopy
+
+
+# =============================================================================
+# CORE DATA STRUCTURES
+# =============================================================================
+
+@dataclass
+class AgentState:
+    """The current state of a brain region / champion"""
+    agent_id: str
+    activation: float  # 0.0 to 1.0
+    current_stake: float  # commitment to current option
+    preferred_option: Optional[str] = None
+
+
+@dataclass
+class Configuration:
+    """
+    A snapshot of agent states - this IS what gets stored as memory.
+    The "shape" of the system at a moment in time.
+    """
+    agent_states: Dict[str, AgentState]
+    context: Dict  # what was happening when this was captured
+    timestamp: int = 0
+    
+    def similarity_to(self, other: 'Configuration') -> float:
+        """How similar is this configuration to another?"""
+        if not self.agent_states or not other.agent_states:
+            return 0.0
+        
+        shared_agents = set(self.agent_states.keys()) & set(other.agent_states.keys())
+        if not shared_agents:
+            return 0.0
+        
+        total_similarity = 0.0
+        for agent_id in shared_agents:
+            my_state = self.agent_states[agent_id]
+            other_state = other.agent_states[agent_id]
+            
+            # Compare activations - but weight by whether both are active
+            both_active = my_state.activation > 0.3 and other_state.activation > 0.3
+            both_inactive = my_state.activation < 0.3 and other_state.activation < 0.3
+            
+            if both_active or both_inactive:
+                # Same activity level pattern
+                activation_sim = 1.0 - abs(my_state.activation - other_state.activation)
+            else:
+                # Mismatched pattern - big penalty
+                activation_sim = 0.2
+            
+            # Compare preferred options if present
+            option_match = 1.0 if my_state.preferred_option == other_state.preferred_option else 0.5
+            
+            total_similarity += activation_sim * option_match
+        
+        return total_similarity / len(shared_agents)
+
+
+class CoordinationMode(Enum):
+    EXTERNAL = "external"  # dPCC: unified action toward world
+    INTERNAL = "internal"  # vPCC: routing between separate agents
+
+
+# =============================================================================
+# CHAMPIONS / AGENTS - Brain regions with preferences
+# =============================================================================
+
+class Agent:
+    """
+    A brain region that can be coordinated.
+    Has preferences, can be activated, maintains state.
+    """
+    
+    def __init__(self, agent_id: str, value_map: Dict[str, float]):
+        self.agent_id = agent_id
+        self.value_map = value_map
+        self.state = AgentState(
+            agent_id=agent_id,
+            activation=0.0,
+            current_stake=0.0,
+            preferred_option=None
+        )
+    
+    def evaluate(self, option: Dict) -> float:
+        """Evaluate an option based on this agent's values"""
+        total = 0.0
+        for obj in option.get('objects', []):
+            total += self.value_map.get(obj, 0.0)
+        return total
+    
+    def activate_for_external(self, options: List[Dict]) -> Tuple[str, float]:
+        """
+        Called by dPCC for external coordination.
+        Must commit to ONE option with a stake.
+        """
+        best_option = None
+        best_value = float('-inf')
+        
+        for opt in options:
+            value = self.evaluate(opt)
+            if value > best_value:
+                best_value = value
+                best_option = opt.get('id')
+        
+        # Convert value to stake (normalized 0-1 with noise)
+        stake = max(0.0, min(1.0, (best_value + 1) / 2 + random.uniform(-0.1, 0.1)))
+        
+        self.state.activation = stake
+        self.state.current_stake = stake
+        self.state.preferred_option = best_option
+        
+        return best_option, stake
+    
+    def receive_internal_signal(self, signal: Dict) -> Dict:
+        """
+        Called by vPCC for internal routing.
+        Process signal and optionally respond - no commitment needed.
+        """
+        # Just update activation based on signal relevance
+        relevance = 0.0
+        for obj in signal.get('objects', []):
+            if obj in self.value_map:
+                relevance += 0.3
+        
+        self.state.activation = min(1.0, self.state.activation + relevance)
+        
+        # Return any response
+        return {
+            'from': self.agent_id,
+            'activation': self.state.activation,
+            'recognized': list(set(signal.get('objects', [])) & set(self.value_map.keys()))
+        }
+    
+    def assume_configuration(self, saved_state: AgentState):
+        """Restore this agent to a previously saved state"""
+        self.state = deepcopy(saved_state)
+
+
+class vmPFC_Agent(Agent):
+    """Ventromedial PFC - personal/emotional value"""
+    def __init__(self):
+        super().__init__("vmPFC", {
+            "person_loved": 0.95,
+            "person_familiar": 0.7,
+            "person_stranger": 0.3,
+            "self": 1.0,
+            "home": 0.8,
+            "danger_state": -0.3,
+            "safety_state": 0.2,
+        })
+
+
+class dlPFC_Agent(Agent):
+    """Dorsolateral PFC - abstract/utilitarian value"""
+    def __init__(self):
+        super().__init__("dlPFC", {
+            "person_loved": 0.3,
+            "person_familiar": 0.3,
+            "person_stranger": 0.3,
+            "multiple_persons": 0.9,
+            "rule_following": 0.8,
+            "efficiency": 0.7,
+            "danger_state": -0.1,
+            "safety_state": 0.1,
+        })
+
+
+class Amygdala_Agent(Agent):
+    """Amygdala - threat/salience detection"""
+    def __init__(self):
+        super().__init__("amygdala", {
+            "danger_state": 0.9,
+            "threat": 0.95,
+            "person_stranger": 0.3,
+            "safety_state": -0.2,
+            "person_loved": 0.4,  # emotional salience
+        })
+
+
+class Hippocampus_Agent(Agent):
+    """Hippocampus - memory encoding/retrieval"""
+    def __init__(self):
+        super().__init__("hippocampus", {
+            "familiar": 0.8,
+            "novel": 0.6,
+            "place": 0.7,
+            "person_familiar": 0.5,
+            "person_loved": 0.6,
+        })
+        self.stored_configurations: List[Configuration] = []
+    
+    def encode(self, config: Configuration):
+        """Store a configuration as episodic memory"""
+        config.timestamp = len(self.stored_configurations)
+        self.stored_configurations.append(deepcopy(config))
+    
+    def retrieve_similar(self, cue: Configuration, threshold: float = 0.3) -> Optional[Configuration]:
+        """Find a stored configuration similar to the cue"""
+        best_match = None
+        best_similarity = threshold
+        
+        for stored in self.stored_configurations:
+            sim = cue.similarity_to(stored)
+            if sim > best_similarity:
+                best_similarity = sim
+                best_match = stored
+        
+        return best_match
+
+
+# =============================================================================
+# dACC - Coherence Check for External Coordination
+# =============================================================================
+
+class dACC:
+    """
+    Dorsal ACC - checks if external coordination produced clear winner.
+    Only used by dPCC pathway.
+    """
+    
+    def __init__(self, threshold: float = 0.15):
+        self.threshold = threshold
+    
+    def check_coherence(self, stakes: Dict[str, float]) -> Tuple[bool, Optional[str]]:
+        """Is there a clear winner among options?"""
+        if not stakes:
+            return False, None
+        
+        sorted_opts = sorted(stakes.items(), key=lambda x: x[1], reverse=True)
+        
+        if len(sorted_opts) < 2:
+            return True, sorted_opts[0][0]
+        
+        top_opt, top_stake = sorted_opts[0]
+        second_opt, second_stake = sorted_opts[1]
+        
+        if top_stake - second_stake >= self.threshold:
+            return True, top_opt
+        else:
+            return False, None  # Deadlock
+
+
+# =============================================================================
+# dPCC - External Coordination ("Act as ONE toward WORLD")
+# =============================================================================
+
+class dPCC:
+    """
+    Dorsal PCC - Coordinates unified external action.
+    
+    When active: Brain regions must agree on single response to world.
+    Connected to: CEN, premotor, motor areas.
+    
+    Process:
+    1. Present options to all agents
+    2. Each agent commits stake to preferred option
+    3. Tally stakes
+    4. dACC checks for clear winner
+    5. If deadlock, iterate with pressure
+    6. When resolved → motor output + hand off to vPCC for encoding
+    """
+    
+    def __init__(self, agents: List[Agent], dacc: dACC, max_iterations: int = 10):
+        self.agents = agents
+        self.dacc = dacc
+        self.max_iterations = max_iterations
+        self.activity_level = 0.0
+    
+    def coordinate_external_response(self, options: List[Dict], 
+                                      verbose: bool = False) -> Tuple[str, Configuration]:
+        """
+        Main external coordination loop.
+        Returns: (winning_option_id, final_configuration)
+        """
+        self.activity_level = 1.0  # dPCC active during external coordination
+        
+        if verbose:
+            print(f"\n[dPCC] Coordinating external response...")
+            print(f"       Options: {[o.get('id') for o in options]}")
+        
+        for iteration in range(self.max_iterations):
+            if verbose:
+                print(f"\n  --- Iteration {iteration + 1} ---")
+            
+            # Collect stakes from all agents
+            option_stakes: Dict[str, float] = {o['id']: 0.0 for o in options}
+            
+            for agent in self.agents:
+                preferred, stake = agent.activate_for_external(options)
+                if preferred:
+                    option_stakes[preferred] += stake
+                    if verbose:
+                        print(f"    {agent.agent_id}: {stake:.2f} → {preferred}")
+            
+            if verbose:
+                print(f"    Totals: {option_stakes}")
+            
+            # Check coherence
+            resolved, winner = self.dacc.check_coherence(option_stakes)
+            
+            if resolved:
+                if verbose:
+                    print(f"    dACC: RESOLVED → {winner}")
+                
+                # Capture final configuration
+                config = self._capture_configuration(options, winner)
+                self.activity_level = 0.0
+                return winner, config
+            
+            if verbose:
+                print(f"    dACC: DEADLOCK - iterating...")
+        
+        # Forced resolution
+        if verbose:
+            print(f"\n  Max iterations - forcing decision")
+        
+        winner = max(option_stakes.items(), key=lambda x: x[1])[0]
+        config = self._capture_configuration(options, winner)
+        self.activity_level = 0.0
+        return winner, config
+    
+    def _capture_configuration(self, options: List[Dict], winner: str) -> Configuration:
+        """Snapshot the current agent states"""
+        agent_states = {}
+        for agent in self.agents:
+            agent_states[agent.agent_id] = deepcopy(agent.state)
+        
+        return Configuration(
+            agent_states=agent_states,
+            context={
+                'options': options,
+                'winner': winner,
+                'mode': CoordinationMode.EXTERNAL.value
+            }
+        )
+
+
+# =============================================================================
+# vPCC - Internal Coordination ("Route signals between PARTS")
+# =============================================================================
+
+class vPCC:
+    """
+    Ventral PCC - Routes signals between internal agents.
+    
+    When active: Agents work separately, just need communication.
+    Connected to: DMN, sgACC, hippocampus.
+    
+    Key functions:
+    1. Route signals between agents without requiring agreement
+    2. Coordinate memory RETRIEVAL by reinstating configurations
+    3. The "self" pattern emerges from characteristic routing
+    
+    Sparse self-template = noisy routing = ambiguous pattern matching
+    """
+    
+    def __init__(self, agents: List[Agent], hippocampus: Hippocampus_Agent,
+                 noise_level: float = 0.0):
+        self.agents = agents
+        self.hippocampus = hippocampus
+        self.noise_level = noise_level  # For modeling sparse self-template
+        self.activity_level = 0.0
+        self.current_configuration: Optional[Configuration] = None
+    
+    def route_internal_signal(self, signal: Dict, verbose: bool = False) -> List[Dict]:
+        """
+        Route a signal between agents internally.
+        No agreement needed - just facilitate communication.
+        """
+        self.activity_level = 0.5  # Moderate activity for routing
+        
+        if verbose:
+            print(f"\n[vPCC] Routing internal signal...")
+        
+        responses = []
+        for agent in self.agents:
+            # Add noise if sparse self-template
+            if self.noise_level > 0:
+                noisy_signal = self._add_noise_to_signal(signal)
+                response = agent.receive_internal_signal(noisy_signal)
+            else:
+                response = agent.receive_internal_signal(signal)
+            responses.append(response)
+            
+            if verbose:
+                print(f"    {agent.agent_id} → activation: {response['activation']:.2f}")
+        
+        return responses
+    
+    def encode_to_memory(self, config: Configuration, verbose: bool = False):
+        """
+        Pass configuration to hippocampus for storage.
+        Note: vPCC activity is LOW during encoding - it's just a handoff.
+        """
+        self.activity_level = 0.2  # Low activity - just passing along
+        
+        if verbose:
+            print(f"\n[vPCC] Encoding to hippocampus (low activity)...")
+        
+        self.hippocampus.encode(config)
+        
+        if verbose:
+            print(f"       Stored configuration #{config.timestamp}")
+    
+    def retrieve_memory(self, cue: Dict, verbose: bool = False) -> Optional[Configuration]:
+        """
+        Retrieve a memory by reinstating the configuration.
+        
+        THIS is where vPCC is highly active:
+        - Must coordinate agents BACK INTO the stored shape
+        - This is what "remembering" feels like
+        - dPCC stays quiet (not external action)
+        """
+        self.activity_level = 1.0  # HIGH activity during retrieval
+        
+        if verbose:
+            print(f"\n[vPCC] Memory retrieval (HIGH activity)...")
+            print(f"       Cue: {cue}")
+        
+        # Create a cue configuration from current partial activation
+        cue_config = self._build_cue_configuration(cue)
+        
+        # Query hippocampus
+        retrieved = self.hippocampus.retrieve_similar(cue_config)
+        
+        if retrieved is None:
+            if verbose:
+                print(f"       No matching memory found")
+            self.activity_level = 0.0
+            return None
+        
+        if verbose:
+            print(f"       Found memory #{retrieved.timestamp}")
+            print(f"       Reinstating configuration...")
+        
+        # REINSTATE the configuration - coordinate agents back into shape
+        self._reinstate_configuration(retrieved, verbose)
+        
+        self.current_configuration = retrieved
+        return retrieved
+    
+    def _build_cue_configuration(self, cue: Dict) -> Configuration:
+        """Build a partial configuration from retrieval cue"""
+        # Activate agents based on cue
+        agent_states = {}
+        for agent in self.agents:
+            response = agent.receive_internal_signal(cue)
+            agent_states[agent.agent_id] = deepcopy(agent.state)
+        
+        return Configuration(
+            agent_states=agent_states,
+            context={'cue': cue}
+        )
+    
+    def _reinstate_configuration(self, config: Configuration, verbose: bool = False):
+        """
+        Coordinate agents back into stored configuration.
+        This is the core of memory retrieval.
+        """
+        for agent in self.agents:
+            if agent.agent_id in config.agent_states:
+                saved_state = config.agent_states[agent.agent_id]
+                
+                # Add noise if sparse self-template
+                if self.noise_level > 0:
+                    saved_state = self._add_noise_to_state(saved_state)
+                
+                agent.assume_configuration(saved_state)
+                
+                if verbose:
+                    print(f"         {agent.agent_id} → activation: {agent.state.activation:.2f}")
+    
+    def _add_noise_to_signal(self, signal: Dict) -> Dict:
+        """Add noise to signal for sparse self-template modeling"""
+        noisy = signal.copy()
+        if 'objects' in noisy and random.random() < self.noise_level:
+            # Randomly add spurious object
+            spurious = random.choice(['self', 'threat', 'person_loved', 'novel'])
+            noisy['objects'] = noisy.get('objects', []) + [spurious]
+        return noisy
+    
+    def _add_noise_to_state(self, state: AgentState) -> AgentState:
+        """Add noise to state restoration"""
+        noisy_state = deepcopy(state)
+        noisy_state.activation += random.uniform(-self.noise_level, self.noise_level)
+        noisy_state.activation = max(0.0, min(1.0, noisy_state.activation))
+        return noisy_state
+    
+    def check_self_relevance(self, stimulus: Dict, verbose: bool = False) -> float:
+        """
+        Check if stimulus matches characteristic self-pattern.
+        
+        With noise (sparse template): even random stimuli might match
+        → This is ideas of reference!
+        """
+        # Reset agents before checking (clean slate)
+        for agent in self.agents:
+            agent.state.activation = 0.0
+            agent.state.current_stake = 0.0
+        
+        # Route the stimulus to see which agents respond
+        responses = self.route_internal_signal(stimulus, verbose=False)
+        
+        # Build current configuration from stimulus
+        current_config = Configuration(
+            agent_states={agent.agent_id: deepcopy(agent.state) for agent in self.agents},
+            context={'stimulus': stimulus}
+        )
+        
+        # Compare to stored memories - looking for PATTERN match
+        max_similarity = 0.0
+        for stored in self.hippocampus.stored_configurations:
+            # Base similarity from configuration comparison
+            sim = current_config.similarity_to(stored)
+            
+            # With sparse template, random noise gets added to similarity
+            # This makes unrelated stimuli feel self-relevant!
+            if self.noise_level > 0:
+                noise_boost = random.uniform(0, self.noise_level * 0.8)
+                sim = min(1.0, sim + noise_boost)
+            
+            max_similarity = max(max_similarity, sim)
+        
+        # If no stored memories, sparse template still might fire
+        if not self.hippocampus.stored_configurations and self.noise_level > 0:
+            max_similarity = random.uniform(0.2, 0.5) * self.noise_level
+        
+        if verbose:
+            print(f"\n[vPCC] Self-relevance check: {max_similarity:.2f}")
+            if self.noise_level > 0:
+                print(f"       (noise level: {self.noise_level} - sparse template)")
+        
+        return min(1.0, max_similarity)
+
+
+# =============================================================================
+# INTEGRATED SYSTEM
+# =============================================================================
+
+class PCCSystem:
+    """
+    Complete PCC system with both dorsal and ventral pathways.
+    """
+    
+    def __init__(self, noise_level: float = 0.0):
+        # Create agents
+        self.vmPFC = vmPFC_Agent()
+        self.dlPFC = dlPFC_Agent()
+        self.amygdala = Amygdala_Agent()
+        self.hippocampus = Hippocampus_Agent()
+        
+        self.agents = [self.vmPFC, self.dlPFC, self.amygdala]
+        
+        # Create PCC subsystems
+        self.dacc = dACC(threshold=0.15)
+        self.dpcc = dPCC(self.agents, self.dacc)
+        self.vpcc = vPCC(self.agents, self.hippocampus, noise_level=noise_level)
+    
+    def process_external_choice(self, options: List[Dict], 
+                                 verbose: bool = False) -> Dict:
+        """
+        Full pipeline for external choice:
+        1. dPCC coordinates unified response
+        2. Hand off to vPCC for memory encoding
+        """
+        if verbose:
+            print("=" * 60)
+            print("EXTERNAL CHOICE - dPCC ACTIVE")
+            print("=" * 60)
+        
+        # dPCC: External coordination
+        winner, config = self.dpcc.coordinate_external_response(options, verbose)
+        
+        # vPCC: Encode to memory (low activity)
+        self.vpcc.encode_to_memory(config, verbose)
+        
+        return {
+            'winner': winner,
+            'configuration': config,
+            'dpcc_final_activity': self.dpcc.activity_level,
+            'vpcc_final_activity': self.vpcc.activity_level
+        }
+    
+    def retrieve_memory(self, cue: Dict, verbose: bool = False) -> Dict:
+        """
+        Memory retrieval:
+        - vPCC HIGH activity (reinstating configuration)
+        - dPCC LOW activity (not external action)
+        """
+        if verbose:
+            print("=" * 60)
+            print("MEMORY RETRIEVAL - vPCC ACTIVE, dPCC QUIET")
+            print("=" * 60)
+        
+        retrieved = self.vpcc.retrieve_memory(cue, verbose)
+        
+        return {
+            'retrieved': retrieved,
+            'dpcc_activity': self.dpcc.activity_level,
+            'vpcc_activity': self.vpcc.activity_level
+        }
+    
+    def check_self_relevance(self, stimulus: Dict, verbose: bool = False) -> float:
+        """Check if stimulus is self-relevant"""
+        return self.vpcc.check_self_relevance(stimulus, verbose)
+
+
+# =============================================================================
+# DEMONSTRATION
+# =============================================================================
+
+def create_moral_dilemma_options() -> List[Dict]:
+    return [
+        {'id': 'save_loved', 'objects': ['person_loved', 'danger_state']},
+        {'id': 'save_strangers', 'objects': ['multiple_persons', 'person_stranger', 'danger_state']}
+    ]
+
+def create_easy_options() -> List[Dict]:
+    return [
+        {'id': 'help_loved', 'objects': ['person_loved', 'safety_state']},
+        {'id': 'ignore_stranger', 'objects': ['person_stranger', 'safety_state']}
+    ]
+
+
+def main():
+    print("=" * 70)
+    print("PCC MODEL v3: External (dPCC) vs Internal (vPCC) Coordination")
+    print("=" * 70)
+    
+    # Create system with normal (no noise) vPCC
+    system = PCCSystem(noise_level=0.0)
+    
+    # =========================================================================
+    # TEST 1: External choice (dPCC active)
+    # =========================================================================
+    print("\n\n### TEST 1: EXTERNAL CHOICE (dPCC coordinates) ###")
+    options = create_moral_dilemma_options()
+    result = system.process_external_choice(options, verbose=True)
+    print(f"\nResult: {result['winner']}")
+    print(f"dPCC activity: {result['dpcc_final_activity']:.2f} (should be ~0 after completion)")
+    print(f"vPCC activity: {result['vpcc_final_activity']:.2f} (low during encoding)")
+    
+    # =========================================================================
+    # TEST 2: Memory retrieval (vPCC active, dPCC quiet)
+    # =========================================================================
+    print("\n\n### TEST 2: MEMORY RETRIEVAL (vPCC active, dPCC quiet) ###")
+    cue = {'objects': ['person_loved', 'danger_state']}
+    result = system.retrieve_memory(cue, verbose=True)
+    print(f"\ndPCC activity: {result['dpcc_activity']:.2f} (should be ~0)")
+    print(f"vPCC activity: {result['vpcc_activity']:.2f} (should be HIGH ~1.0)")
+    
+    # =========================================================================
+    # TEST 3: Build up memories, then test retrieval
+    # =========================================================================
+    print("\n\n### TEST 3: MULTIPLE CHOICES → RETRIEVAL ###")
+    
+    # Make several choices
+    for i in range(5):
+        options = create_moral_dilemma_options() if i % 2 == 0 else create_easy_options()
+        system.process_external_choice(options, verbose=False)
+    
+    print(f"Stored {len(system.hippocampus.stored_configurations)} memories")
+    
+    # Retrieve
+    cue = {'objects': ['person_loved']}
+    result = system.retrieve_memory(cue, verbose=True)
+    
+    # =========================================================================
+    # TEST 4: SPARSE SELF-TEMPLATE (Ideas of Reference Demo)
+    # =========================================================================
+    print("\n\n### TEST 4: SPARSE SELF-TEMPLATE (Ideas of Reference) ###")
+    print("=" * 60)
+    
+    # Normal system - rich self-template
+    print("\nCreating NORMAL system (rich self-template)...")
+    normal_system = PCCSystem(noise_level=0.0)
+    for _ in range(3):
+        normal_system.process_external_choice(create_moral_dilemma_options(), verbose=False)
+    print(f"  Stored {len(normal_system.hippocampus.stored_configurations)} self-defining memories")
+    
+    # Sparse/noisy system (psychosis model)
+    print("\nCreating SPARSE system (impoverished self-template, noise=0.6)...")
+    noisy_system = PCCSystem(noise_level=0.6)
+    for _ in range(3):
+        noisy_system.process_external_choice(create_moral_dilemma_options(), verbose=False)
+    print(f"  Stored {len(noisy_system.hippocampus.stored_configurations)} memories (but matching is noisy)")
+    
+    # Test self-relevance on CLEARLY UNRELATED stimuli
+    print("\n" + "=" * 60)
+    print("Testing self-relevance on UNRELATED stimuli:")
+    print("(These should NOT feel self-relevant to a normal system)")
+    print("=" * 60)
+    
+    unrelated_stimuli = [
+        {'objects': ['efficiency', 'rule_following'], 'label': 'abstract concepts'},
+        {'objects': ['novel', 'place'], 'label': 'random scene'},
+        {'objects': ['person_stranger'], 'label': 'unknown person'},
+        {'objects': [], 'label': 'nothing at all'},
+    ]
+    
+    print(f"\n{'Stimulus':<35} {'Normal':<12} {'Sparse':<12} {'Difference'}")
+    print("-" * 70)
+    
+    for stim in unrelated_stimuli:
+        normal_score = normal_system.check_self_relevance(stim)
+        noisy_score = noisy_system.check_self_relevance(stim)
+        diff = noisy_score - normal_score
+        marker = "← IDEA OF REF!" if diff > 0.2 else ""
+        print(f"{stim['label']:<35} {normal_score:<12.2f} {noisy_score:<12.2f} +{diff:.2f} {marker}")
+    
+    print("\n" + "=" * 60)
+    print("INTERPRETATION:")
+    print("=" * 60)
+    print("""
+In the NORMAL system:
+  - Rich self-template allows precise pattern matching
+  - Unrelated stimuli don't match → low self-relevance
+  - "That's not about me"
+
+In the SPARSE system:
+  - Impoverished template → noisy/ambiguous matching
+  - Random stimuli trigger "this might be about me" 
+  - The news anchor seems to be talking to ME
+  - License plates contain messages FOR ME
+  - This IS ideas of reference emerging from the architecture!
+""")
+
+
+if __name__ == "__main__":
+    main()
